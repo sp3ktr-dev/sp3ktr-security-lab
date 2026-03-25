@@ -2,6 +2,7 @@ import os
 import platform
 import socket
 import uuid
+import subprocess
 
 def get_hostname():
     return socket.gethostname()
@@ -55,6 +56,78 @@ def analyze_system(ip, os_info):
 
     return findings
 
+def run_command(command):
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return ""
+
+def get_defualt_gateway():
+    output = run_command(["ip", "route"])
+    for line in output.splitlines():
+        if line.startswith("default via"):
+            parts = line.split()
+            return parts[2]
+    return "Unavailable"
+
+def get_subnet_info():
+    output = run_command(["ip", "-4", "addr", "show"])
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("inet ") and "127.0.0.1" not in line:
+            parts = line.split()
+            return parts[1]
+    return "Unavailable"
+
+def get_dns_servers():
+    servers = []
+
+    try:
+        with open("/etc/resolv.conf", "r") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("nameserver"):
+                    parts = line.split()
+                    if len(parts) > 1:
+                        servers.append(parts[1])
+    except Exception:
+        return ["Unavailable"]
+
+    # If Ubuntu/systemd stub resolver is in use, get real upstream DNS
+    if "127.0.0.53" in servers:
+        output = run_command(["resolvectl", "status"])
+        real_servers = []
+
+        for line in output.splitlines():
+            line = line.strip()
+
+            if line.startswith("DNS Servers:"):
+                dns_value = line.split(":", 1)[1].strip()
+                if dns_value and dns_value not in real_servers:
+                    real_servers.append(dns_value)
+
+            elif line.startswith("Current DNS Server:"):
+                dns_value = line.split(":", 1)[1].strip()
+                if dns_value and dns_value not in real_servers:
+                    real_servers.append(dns_value)
+
+        return real_servers if real_servers else ["127.0.0.53"]
+
+    # Remove duplicates while preserving order
+    unique_servers = []
+    for server in servers:
+        if server not in unique_servers:
+            unique_servers.append(server)
+
+    return unique_servers if unique_servers else ["Unavailable"]
+
+# -- Main ---
 def main():
     print("=== Sp3ktr Security Lab - System Enumerator v1 ===")
 
@@ -64,13 +137,17 @@ def main():
     arch = get_architecture()
     ip = get_local_ip()
     mac = get_mac_address()
+    dns_servers = get_dns_servers()
 
     print(f"Hostname     : {hostname}")
     print(f"Current User : {user}")
     print(f"OS Info      : {os_info}")
     print(f"Architecture : {arch}")
     print(f"Local IP     : {ip}")
+    print(f"Default GW   : {get_defualt_gateway()}")
+    print(f"Subnet/CIDR  : {get_subnet_info()}")
     print(f"MAC Address  : {mac}")
+    print(f"DNS Servers  : {', '.join(dns_servers)}")
 
     print("\n[+] Attacker Perspective")
     findings = analyze_system(ip, os_info)
