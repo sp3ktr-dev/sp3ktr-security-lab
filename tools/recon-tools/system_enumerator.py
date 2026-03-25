@@ -38,7 +38,7 @@ def get_mac_address():
     except Exception:
         return "Unavailable"
 
-def analyze_system(ip, os_info):
+def analyze_system(ip, os_info, listening_ports):
     findings = []
 
     # Check if private IP
@@ -51,7 +51,19 @@ def analyze_system(ip, os_info):
     elif "Windows" in os_info:
         findings.append("Windows system identified")
 
-    # Basic attack surface thought
+    # Service-based observations
+    if "tcp 22" in listening_ports:
+        findings.append("SSH service detected (remote administration possible)")
+
+    if "tcp 53" in listening_ports or "udp 53" in listening_ports:
+        findings.append("DNS service detected")
+
+    if "udp 68" in listening_ports:
+        findings.append("DHCP client activity detected")
+
+    if len(listening_ports) >= 3 and listening_ports != ["None detected"]:
+        findings.append("Multiple network services exposed")
+
     findings.append("Potential lateral movement candidate")
 
     return findings
@@ -127,6 +139,34 @@ def get_dns_servers():
 
     return unique_servers if unique_servers else ["Unavailable"]
 
+def get_listening_ports():
+    output = run_command(["ss", "-tuln"])
+    ports = set()
+
+    for line in output.splitlines():
+        line = line.strip()
+
+        if not line or line.startswith("Netid"):
+            continue
+
+        parts = line.split()
+
+        if len(parts) < 5:
+            continue
+
+        protocol = parts[0]
+        local_address = parts[4]
+
+        if ":" in local_address:
+            port = local_address.rsplit(":", 1)[-1]
+            ports.add((protocol, port))
+
+    if not ports:
+        return ["None detected"]
+
+    sorted_ports = sorted(ports, key=lambda x: (x[0], int(x[1]) if x[1].isdigit() else x[1]))
+    return [f"{protocol} {port}" for protocol, port in sorted_ports]
+
 # -- Main ---
 def main():
     print("=== Sp3ktr Security Lab - System Enumerator v1 ===")
@@ -138,6 +178,7 @@ def main():
     ip = get_local_ip()
     mac = get_mac_address()
     dns_servers = get_dns_servers()
+    listening_ports = get_listening_ports()
 
     print(f"Hostname     : {hostname}")
     print(f"Current User : {user}")
@@ -149,8 +190,12 @@ def main():
     print(f"MAC Address  : {mac}")
     print(f"DNS Servers  : {', '.join(dns_servers)}")
 
+    print("\n[+] Listening Ports")
+    for port in listening_ports:
+        print(f"- {port}")
+
     print("\n[+] Attacker Perspective")
-    findings = analyze_system(ip, os_info)
+    findings = analyze_system(ip, os_info, listening_ports)
 
     for f in findings:
         print(f"- {f}")
